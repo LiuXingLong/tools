@@ -48,9 +48,10 @@ TOOL_SYSTEM_PROMPT = """
 def _build_tool_desc(tools: list[dict]) -> str:
     lines = []
     for t in tools:
-        name = t.get("function", t).get("name", t.get("name", "unknown"))
-        desc = t.get("function", t).get("description", t.get("description", ""))
-        params = t.get("function", t).get("parameters", t.get("parameters", {}))
+        func = t.get("function", t)
+        name = func.get("name", "unknown")
+        desc = func.get("description", "")
+        params = func.get("parameters", {})
         props = params.get("properties", {})
         required = params.get("required", [])
         args_str = ", ".join(
@@ -61,8 +62,14 @@ def _build_tool_desc(tools: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _gen_response_id() -> str:
-    return f"resp_{uuid.uuid4().hex[:24]}"
+def _gen_id(prefix: str = "resp") -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:24]}"
+
+
+class DeepSeekAPIError(Exception):
+    def __init__(self, status: int, message: str):
+        self.status = status
+        self.message = message
 
 
 class DeepSeekResponses:
@@ -101,20 +108,11 @@ class DeepSeekResponses:
                         )
         except Exception as e:
             logger.error("PoW 异常: %s", e)
-            raise RuntimeError(f"PoW 认证失败（token 可能无效）: {e}")
+            raise DeepSeekAPIError(401, f"PoW 认证失败（token 可能无效）: {e}")
 
     def create(self, **kwargs) -> dict | list[dict]:
         """
         OpenAI Responses API 兼容入口
-
-        支持参数:
-          model: str          - 模型名 deepseek-chat、deepseek-reasoner
-          input: str | list   - 输入
-          tools: list[dict]   - 工具定义
-          tool_choice: str    - "auto" / "none" / "required"
-          stream: bool        - True=流式输出事件列表, False=返回完整响应
-          temperature: float
-          max_output_tokens: int
         """
         self._ensure_session()
         self._kwargs = kwargs
@@ -123,12 +121,33 @@ class DeepSeekResponses:
         self._tool_choice = kwargs.get("tool_choice", "auto")
         self._has_tools = bool(self._tools) and self._tool_choice != "none"
 
+        model_info = f"model={self._model_name} stream={kwargs.get('stream', False)}"
+        logger.info(
+            {
+                "type": "REQ",
+                "model": self._model_name,
+                "input": str(kwargs.get("input", ""))[:80],
+            }
+        )
+
         if kwargs.get("stream", False):
             return list(self._stream())
-        return self._non_stream()
+        try:
+            result = self._non_stream()
+            logger.info({"type": "RESP", "model": self._model_name, "resp": result})
+            return result
+        except DeepSeekAPIError as e:
+            logger.warning(
+                {
+                    "type": "ERR",
+                    "model": self._model_name,
+                    "status": e.status,
+                    "error": e.message,
+                }
+            )
+            return {"error": {"message": e.message, "status": e.status}}
 
     def _prepare(self) -> tuple[str, str, dict]:
-        """准备请求公共部分，返回 (prompt, model_name, payload)"""
         user_input = self._parse_input(self._kwargs.get("input", ""))
         thinking_enabled = self._model_name == "deepseek-reasoner"
 
@@ -148,6 +167,7 @@ class DeepSeekResponses:
             "search_enabled": True,
             "model_type": "default",
         }
+        logger.info({"type": "DSREQ", "target": "chat/completion", "payload": payload})
         return prompt, self._model_name, payload
 
     def _do_request(self, payload: dict) -> list[dict]:
@@ -168,11 +188,18 @@ class DeepSeekResponses:
                     detail = resp.json()
                 except Exception:
                     detail = getattr(resp, "text", str(e))[:500]
-            raise RuntimeError(
-                f"DeepSeek API 调用失败 (status={status}): {detail}"
-            ) from e
+            logger.warning(
+                {
+                    "type": "DSRES",
+                    "target": "chat/completion",
+                    "status": status,
+                    "error": detail,
+                }
+            )
+            raise DeepSeekAPIError(status, f"DeepSeek API 调用失败: {detail}") from e
 
         events = []
+        logger.debug("开始读取 SSE 事件流")
         for line in resp.iter_lines():
             if line:
                 decoded = line.decode("utf-8") if isinstance(line, bytes) else line
@@ -180,6 +207,9 @@ class DeepSeekResponses:
                     raw = decoded[6:].strip()
                     if raw:
                         events.append(json.loads(raw))
+        logger.info(
+            {"type": "DSRES", "target": "chat/completion", "events_count": len(events)}
+        )
         return events
 
     def _non_stream(self) -> dict:
@@ -191,93 +221,109 @@ class DeepSeekResponses:
         return self._build_response(model_name, full_text, tool_call, self._has_tools)
 
     def _stream(self):
-        prompt, model_name, payload = self._prepare()
-        events = self._do_request(payload)
+        try:
+            prompt, model_name, payload = self._prepare()
+            events = self._do_request(payload)
 
-        full_text = self._merge_events(events)
-        full_text = re.sub(r"\s*\[citation:\d+\]", "", full_text)
-        tool_call = self._detect_tool_call(full_text)
-        final = self._build_response(model_name, full_text, tool_call, self._has_tools)
-        msg_id = (
-            final.get("output", [{}])[0].get("id", "msg_unknown")
-            if final.get("output")
-            else "msg_unknown"
-        )
-        seq = 0
+            full_text = self._merge_events(events)
+            full_text = re.sub(r"\s*\[citation:\d+\]", "", full_text)
+            tool_call = self._detect_tool_call(full_text)
+            final = self._build_response(
+                model_name, full_text, tool_call, self._has_tools
+            )
+            msg_id = (
+                final.get("output", [{}])[0].get("id", "msg_unknown")
+                if final.get("output")
+                else "msg_unknown"
+            )
+            seq = 0
 
-        yield {
-            "type": "response.created",
-            "response": final,
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.created",
+                "response": final,
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        yield {
-            "type": "response.in_progress",
-            "response": final,
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.in_progress",
+                "response": final,
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        yield {
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item_id": msg_id,
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item_id": msg_id,
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        yield {
-            "type": "response.content_part.added",
-            "content_index": 0,
-            "item_id": msg_id,
-            "output_index": 0,
-            "part_id": "part_0",
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.content_part.added",
+                "content_index": 0,
+                "item_id": msg_id,
+                "output_index": 0,
+                "part_id": "part_0",
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        for ev in events:
-            item = self._emit_delta(ev)
-            if item:
-                item["item_id"] = msg_id
-                item["sequence_number"] = seq
-                yield item
-                seq += 1
+            for ev in events:
+                item = self._emit_delta(ev)
+                if item:
+                    item["item_id"] = msg_id
+                    item["sequence_number"] = seq
+                    yield item
+                    seq += 1
 
-        yield {
-            "type": "response.output_text.done",
-            "text": full_text,
-            "item_id": msg_id,
-            "output_index": 0,
-            "content_index": 0,
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.output_text.done",
+                "text": full_text,
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        yield {
-            "type": "response.content_part.done",
-            "content_index": 0,
-            "item_id": msg_id,
-            "output_index": 0,
-            "part_id": "part_0",
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.content_part.done",
+                "content_index": 0,
+                "item_id": msg_id,
+                "output_index": 0,
+                "part_id": "part_0",
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        yield {
-            "type": "response.output_item.done",
-            "output_index": 0,
-            "item_id": msg_id,
-            "sequence_number": seq,
-        }
-        seq += 1
+            yield {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item_id": msg_id,
+                "sequence_number": seq,
+            }
+            seq += 1
 
-        yield {
-            "type": "response.completed",
-            "response": final,
-            "sequence_number": seq,
-        }
+            yield {
+                "type": "response.completed",
+                "response": final,
+                "sequence_number": seq,
+            }
+
+            logger.info({"type": "RESP", "model": model_name, "resp": final})
+        except DeepSeekAPIError as e:
+            logger.warning(
+                {"type": "ERR", "model": self._model_name, "error": e.message}
+            )
+            yield {"type": "error", "error": {"message": e.message, "status": e.status}}
+        except Exception as e:
+            logger.error(f"_stream 未知异常: {type(e).__name__}: {e}")
+            yield {
+                "type": "error",
+                "error": {"message": f"{type(e).__name__}: {e}", "status": 500},
+            }
 
     def _emit_delta(self, ev: dict) -> dict | None:
         if "v" not in ev:
@@ -357,14 +403,14 @@ class DeepSeekResponses:
         self, model_name: str, full_text: str, tool_call: dict | None, has_tools: bool
     ) -> dict:
         created = int(time.time())
-        resp_id = _gen_response_id()
+        resp_id = _gen_id("resp")
         output = []
 
         if tool_call:
             output.append(
                 {
                     "type": "function_call",
-                    "id": f"fc_{uuid.uuid4().hex[:16]}",
+                    "id": _gen_id("fc"),
                     "name": tool_call["name"],
                     "arguments": tool_call["arguments"],
                     "status": "completed",
@@ -386,7 +432,7 @@ class DeepSeekResponses:
             output.append(
                 {
                     "type": "message",
-                    "id": f"msg_{uuid.uuid4().hex[:16]}",
+                    "id": _gen_id("msg"),
                     "role": "assistant",
                     "content": content_parts,
                 }
