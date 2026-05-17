@@ -21,7 +21,7 @@ deepseek/
 
 | 变量 | 说明 | 示例值 |
 |------|------|--------|
-| `DEEPSEEK_API_KEY` | **必需**。浏览器中获取的 `userToken` | `8vHJX8O4m...` |
+| `DEEPSEEK_API_KEY` | **必需**。DeepSeek 浏览器获取 Storage下的`userToken` | `8vHJX8O4m...` |
 | `DEEPSEEK_WASM_PATH` | PoW 解算用的 WASM 文件路径，默认 `sha3_wasm_bg.wasm` | `sha3_wasm_bg.wasm` |
 | `PORT` | HTTP 服务端口，默认 `8888` | `8888` |
 
