@@ -173,7 +173,11 @@ async def _stream_response(api_key: str, body: dict):
         logger.warning({"type": "ERR", "error": e.message, "status": e.status})
         yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': e.message, 'status': e.status}}, ensure_ascii=False)}\n\n"
     except Exception as e:
-        logger.error(f"流式处理异常: {type(e).__name__}: {e}")
+        import traceback
+
+        logger.error(
+            "流式处理异常: %s %s\n%s", type(e).__name__, e, traceback.format_exc()
+        )
         yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': f'{type(e).__name__}: {e}', 'status': 500}}, ensure_ascii=False)}\n\n"
 
 
@@ -252,11 +256,14 @@ async def responses_endpoint(request: Request):
             content={"error": {"message": e.message, "status": e.status}},
         )
     except Exception as e:
+        import traceback
+
         logger.error(
-            "[%s] <<< 非流式未知异常: %s %s",
+            "[%s] <<< 非流式未知异常: %s %s\n%s",
             client_ip,
             type(e).__name__,
             e,
+            traceback.format_exc(),
         )
         return JSONResponse(
             status_code=500,

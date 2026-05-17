@@ -12,6 +12,7 @@ deepseek/
   deepseek_chat_cli.py     # CLI 工具
   deepseek_responses_api_sdk.py   # Python SDK 封装
   deepseek_responses_api_server.py # FastAPI HTTP 服务
+  test_deepseek.py         # 测试脚本
   deepseek.log             # 日志文件（不提交）
 sha3_wasm_bg.wasm          # PoW 解算依赖（项目根目录）
 ```
@@ -22,6 +23,7 @@ sha3_wasm_bg.wasm          # PoW 解算依赖（项目根目录）
 |------|------|--------|
 | `DEEPSEEK_API_KEY` | **必需**。浏览器中获取的 `userToken` | `8vHJX8O4m...` |
 | `DEEPSEEK_WASM_PATH` | PoW 解算用的 WASM 文件路径，默认 `sha3_wasm_bg.wasm` | `sha3_wasm_bg.wasm` |
+| `PORT` | HTTP 服务端口，默认 `8888` | `8888` |
 
 ## 脚本说明
 
@@ -54,6 +56,19 @@ from deepseek.deepseek_responses_api_sdk import DeepSeekResponses
 client = DeepSeekResponses()
 resp = client.create(model="deepseek-chat", input="你好")
 print(resp["output"])
+```
+
+### `test_deepseek.py`
+
+```bash
+# 完整测试（SDK + CLI + HTTP 服务）
+python3 deepseek/test_deepseek.py
+
+# 只测 SDK + CLI
+python3 deepseek/test_deepseek.py --no-server
+
+# 只测 HTTP 服务
+python3 deepseek/test_deepseek.py --server-only
 ```
 
 ### `deepseek_responses_api_server.py`

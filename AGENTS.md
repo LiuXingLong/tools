@@ -18,7 +18,13 @@
 ### DeepSeek 工具
 
 ```bash
-# 启动 HTTP 服务
+# 运行测试（SDK + CLI + HTTP 服务）
+python3 deepseek/test_deepseek.py
+
+# 只测 SDK + CLI（不需要 HTTP 服务）
+python3 deepseek/test_deepseek.py --no-server
+
+# 启动 HTTP 服务（端口通过 PORT 环境变量配置，默认 8888）
 python3 deepseek/deepseek_responses_api_server.py
 
 # CLI 对话
@@ -51,6 +57,7 @@ tools/
 │   ├── deepseek_chat_cli.py
 │   ├── deepseek_responses_api_sdk.py
 │   ├── deepseek_responses_api_server.py
+│   ├── test_deepseek.py        # 测试脚本
 │   └── deepseek.log            # 日志文件（不提交）
 ├── sha3_wasm_bg.wasm           # PoW 解算依赖
 ├── edit_image_text.py

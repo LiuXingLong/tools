@@ -149,6 +149,28 @@ class DeepSeekResponses:
             )
             return {"error": {"message": e.message, "status": e.status}}
 
+    def _create_session(self) -> str:
+        url = f"{ds_config.base_url}/chat_session/create"
+        payload = {"character_id": None}
+        resp = self._session.post(url, headers=self._headers, json=payload)
+        resp.raise_for_status()
+        raw = resp.json()
+        logger.debug(f"_create_session raw response: {raw}")
+        if not raw or not isinstance(raw, dict):
+            raise DeepSeekAPIError(
+                500, f"创建 session 失败：无效响应: {resp.text[:200]}"
+            )
+        inner = raw.get("data")
+        if not inner or not isinstance(inner, dict):
+            raise DeepSeekAPIError(500, f"创建 session 失败：data 字段无效: {raw}")
+        biz = inner.get("biz_data")
+        if not biz or not isinstance(biz, dict):
+            raise DeepSeekAPIError(500, f"创建 session 失败：biz_data 字段无效: {raw}")
+        session_id = biz.get("id")
+        if not session_id:
+            raise DeepSeekAPIError(500, f"创建 session 失败：无 id 字段: {raw}")
+        return session_id
+
     def _prepare(self) -> tuple[str, str, dict]:
         user_input = self._parse_input(self._kwargs.get("input", ""))
         thinking_enabled = self._model_name == "deepseek-reasoner"
@@ -158,7 +180,7 @@ class DeepSeekResponses:
             tools_desc = _build_tool_desc(self._tools)
             prompt = TOOL_SYSTEM_PROMPT.format(tools_desc=tools_desc) + "\n\n" + prompt
 
-        chat_session_id = self._model._create_session()
+        chat_session_id = self._create_session()
         self._solve_pow()
 
         payload = {
@@ -173,6 +195,7 @@ class DeepSeekResponses:
         return prompt, self._model_name, payload
 
     def _do_request(self, payload: dict) -> list[dict]:
+        resp = None
         try:
             resp = self._session.post(
                 f"{ds_config.base_url}/chat/completion",
@@ -183,9 +206,9 @@ class DeepSeekResponses:
             )
             resp.raise_for_status()
         except Exception as e:
-            status = getattr(resp, "status_code", 500) if "resp" in dir() else 500
+            status = getattr(resp, "status_code", 500) if resp is not None else 500
             detail = str(e)
-            if "resp" in dir():
+            if resp is not None:
                 try:
                     detail = resp.json()
                 except Exception:
