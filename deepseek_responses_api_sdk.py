@@ -192,64 +192,110 @@ class DeepSeekResponses:
 
     def _stream(self):
         prompt, model_name, payload = self._prepare()
-        try:
-            resp = self._session.post(
-                f"{ds_config.base_url}/chat/completion",
-                headers=self._headers,
-                json=payload,
-                stream=True,
-                timeout=120,
-            )
-            resp.raise_for_status()
-        except Exception as e:
-            status = getattr(resp, "status_code", 500) if "resp" in dir() else 500
-            detail = str(e)
-            if "resp" in dir():
-                try:
-                    detail = resp.json()
-                except Exception:
-                    detail = getattr(resp, "text", str(e))[:500]
-            yield {
-                "type": "error",
-                "error": {
-                    "message": f"DeepSeek API 调用失败: {detail}",
-                    "status": status,
-                },
-            }
-            return
-
-        events = []
-        for line in resp.iter_lines():
-            if line:
-                decoded = line.decode("utf-8") if isinstance(line, bytes) else line
-                if decoded.startswith("data: ") and decoded != "data: [DONE]":
-                    raw = decoded[6:].strip()
-                    if raw:
-                        ev = json.loads(raw)
-                        yield from self._emit_stream_event(ev)
-                        events.append(ev)
+        events = self._do_request(payload)
 
         full_text = self._merge_events(events)
         full_text = re.sub(r"\s*\[citation:\d+\]", "", full_text)
         tool_call = self._detect_tool_call(full_text)
-        yield self._build_response(model_name, full_text, tool_call, self._has_tools)
+        final = self._build_response(model_name, full_text, tool_call, self._has_tools)
+        msg_id = (
+            final.get("output", [{}])[0].get("id", "msg_unknown")
+            if final.get("output")
+            else "msg_unknown"
+        )
+        seq = 0
 
-    def _emit_stream_event(self, ev: dict):
-        """将 DeepSeek SSE 事件转为 OpenAI Responses API 流式事件"""
+        yield {
+            "type": "response.created",
+            "response": final,
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        yield {
+            "type": "response.in_progress",
+            "response": final,
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        yield {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item_id": msg_id,
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        yield {
+            "type": "response.content_part.added",
+            "content_index": 0,
+            "item_id": msg_id,
+            "output_index": 0,
+            "part_id": "part_0",
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        for ev in events:
+            item = self._emit_delta(ev)
+            if item:
+                item["sequence_number"] = seq
+                yield item
+                seq += 1
+
+        yield {
+            "type": "response.output_text.done",
+            "text": full_text,
+            "item_id": msg_id,
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        yield {
+            "type": "response.content_part.done",
+            "content_index": 0,
+            "item_id": msg_id,
+            "output_index": 0,
+            "part_id": "part_0",
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        yield {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item_id": msg_id,
+            "sequence_number": seq,
+        }
+        seq += 1
+
+        yield {
+            "type": "response.completed",
+            "response": final,
+            "sequence_number": seq,
+        }
+
+    def _emit_delta(self, ev: dict) -> dict | None:
         if "v" not in ev:
-            return
+            return None
         p = ev.get("p", "")
         v = ev["v"]
         if not isinstance(v, str):
-            return
+            return None
         target = "content"
         if p:
             target = p.removeprefix("response/")
         if target not in ("content", "thinking_content"):
-            return
-        yield {
+            return None
+        return {
             "type": "response.output_text.delta",
             "delta": v,
+            "item_id": "",
+            "output_index": 0,
+            "content_index": 0,
         }
 
     def _parse_input(self, inp) -> str:
