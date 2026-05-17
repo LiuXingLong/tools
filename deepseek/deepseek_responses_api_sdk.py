@@ -30,9 +30,8 @@ from opendeep.config import config as ds_config
 _HERE = Path(__file__).parent.resolve()
 load_dotenv(dotenv_path=_HERE / ".env")
 
-deepseek_pow.WASM_PATH = os.environ.get(
-    "DEEPSEEK_WASM_PATH", str(_HERE / "sha3_wasm_bg.wasm")
-)
+_wasm_env = os.environ.get("DEEPSEEK_WASM_PATH")
+deepseek_pow.WASM_PATH = str(_HERE / (_wasm_env or "sha3_wasm_bg.wasm"))
 
 logger = logging.getLogger("deepseek.sdk")
 
