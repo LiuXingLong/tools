@@ -12,9 +12,9 @@ deepseek/
   deepseek_chat_cli.py     # CLI 工具
   deepseek_responses_api_sdk.py   # Python SDK 封装
   deepseek_responses_api_server.py # FastAPI HTTP 服务
+  sha3_wasm_bg.wasm        # PoW 解算依赖
   test_deepseek.py         # 测试脚本
   deepseek.log             # 日志文件（不提交）
-sha3_wasm_bg.wasm          # PoW 解算依赖（项目根目录）
 ```
 
 ## 环境变量（deepseek/.env）
