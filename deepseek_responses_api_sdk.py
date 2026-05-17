@@ -240,6 +240,7 @@ class DeepSeekResponses:
         for ev in events:
             item = self._emit_delta(ev)
             if item:
+                item["item_id"] = msg_id
                 item["sequence_number"] = seq
                 yield item
                 seq += 1
