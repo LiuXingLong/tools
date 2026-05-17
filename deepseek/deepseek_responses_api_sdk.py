@@ -19,6 +19,7 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -26,10 +27,12 @@ import opendeep as genai
 from opendeep import pow as deepseek_pow
 from opendeep.config import config as ds_config
 
-load_dotenv()
+_HERE = Path(__file__).parent.resolve()
+load_dotenv(dotenv_path=_HERE / ".env")
 
-# 从 .env 读取 WASM 路径，默认使用 opendeep 内置
-deepseek_pow.WASM_PATH = os.environ.get("DEEPSEEK_WASM_PATH", "sha3_wasm_bg.wasm")
+deepseek_pow.WASM_PATH = os.environ.get(
+    "DEEPSEEK_WASM_PATH", str(_HERE / "sha3_wasm_bg.wasm")
+)
 
 logger = logging.getLogger("deepseek.sdk")
 

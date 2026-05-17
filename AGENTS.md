@@ -2,45 +2,82 @@
 
 ## 项目概述
 
-基于 Python 的图片/PDF 文字编辑工具集，包括：
+基于 Python 的图片/PDF 文字编辑 + DeepSeek Web API 工具集。
+
+**图片/PDF 工具：**
 - `edit_image_text.py` — OCR 驱动的图片文字替换/删除/添加
 - `replace_pdf.py` — PDF 文字搜索替换
 
-无测试文件、无构建系统、无包配置文件，为松散的工具集合。
+**DeepSeek 工具（`deepseek/` 目录）：**
+- `deepseek/deepseek_responses_api_sdk.py` — Python SDK 封装
+- `deepseek/deepseek_responses_api_server.py` — FastAPI HTTP 服务
+- `deepseek/deepseek_chat_cli.py` — CLI 工具
 
-## 构建/运行/测试命令
+## 运行命令
+
+### DeepSeek 工具
 
 ```bash
-# 运行图片文字替换
-python3 edit_image_text.py replace input.jpg --old "旧文字" --new "新文字"
+# 启动 HTTP 服务
+python3 deepseek/deepseek_responses_api_server.py
 
-# 运行 PDF 文字替换
-python3 replace_pdf.py input.pdf output.pdf -r 旧文本 新文本
+# CLI 对话
+python3 deepseek/deepseek_chat_cli.py "你好"
 
-# 检测图片中的文字
-python3 edit_image_text.py detect input.jpg
-
-# 添加文字到图片
-python3 edit_image_text.py add input.jpg -x 50 -y 50 --text "Hello" --size 24 --bold 1
+# 直接在 Python 中使用 SDK
+python3 -c "
+from deepseek.deepseek_responses_api_sdk import DeepSeekResponses
+client = DeepSeekResponses()
+resp = client.create(model='deepseek-chat', input='你好')
+print(resp)
+"
 ```
 
-当前无单元测试、无 lint、无 typecheck 配置。如需添加：
+### 图片/PDF 工具
 
 ```bash
-# 安装开发依赖
-pip install pytest mypy ruff
+python3 edit_image_text.py replace input.jpg --old "旧文字" --new "新文字"
+python3 replace_pdf.py input.pdf output.pdf -r 旧文本 新文本
+```
 
-# 运行所有测试
-python3 -m pytest tests/
+## 项目结构
 
-# 运行单个测试
-python3 -m pytest tests/test_edit_image_text.py -v
+```
+tools/
+├── deepseek/
+│   ├── __init__.py
+│   ├── .env                    # 环境变量（不提交）
+│   ├── .env.example
+│   ├── deepseek_chat_cli.py
+│   ├── deepseek_responses_api_sdk.py
+│   ├── deepseek_responses_api_server.py
+│   └── deepseek.log            # 日志文件（不提交）
+├── sha3_wasm_bg.wasm           # PoW 解算依赖
+├── edit_image_text.py
+├── replace_pdf.py
+├── .gitignore
+├── AGENTS.md
+└── README.md
+```
 
-# 类型检查
-mypy edit_image_text.py --strict
+## DeepSeek 代码规范
 
-# Lint
-ruff check .
+所有 DeepSeek 核心逻辑在 `deepseek/deepseek_responses_api_sdk.py` 中维护，
+`deepseek/deepseek_responses_api_server.py` 仅负责 HTTP 路由和 SSE 格式转换。
+
+```bash
+# 依赖
+pip install opendeep fastapi uvicorn python-dotenv
+```
+
+### 跨文件引用
+
+```python
+# SDK 引用
+from deepseek_responses_api_sdk import DeepSeekResponses  # 同目录
+
+# 通过项目 root 引用
+from deepseek.deepseek_responses_api_sdk import DeepSeekResponses
 ```
 
 ## 代码风格指南
@@ -101,22 +138,6 @@ def replace_text_ocr(...) -> str:
     """
 ```
 
-### 错误处理
-
-- 可选依赖使用 try/except 延迟导入降级
-- 文件缺失使用 `FileNotFoundError` + 中文消息
-- 参数错误使用 `print` + `sys.exit(1)`（CLI 上下文）
-- 静默处理非关键异常（`except Exception: pass`）
-- 外部资源不可用时返回空字符串/None 而非崩溃
-
-### 代码组织
-
-- 顶层模块内含多个函数的松散脚本，无类封装
-- 私有函数前缀 `_`（约 10 个），公开函数约 6 个
-- CLI 入口统一通过 `main()` + `argparse`，子命令模式
-- `replace_pdf.py` 为过程式脚本（无 `if __name__` 守卫）
-- 中文变量名/注释适合本项目上下文（处理中文文档）
-
 ### 提交信息规范
 
 ```txt
@@ -126,30 +147,10 @@ refactor: 重构 xxx
 docs: 更新 xxx 文档
 ```
 
-### 处理 PDF 的特殊约定
-
-```python
-# 宋体字体提取（macOS 硬编码路径）
-ttc = TTCollection("/System/Library/Fonts/Supplemental/Songti.ttc")
-songti_buf = io.BytesIO()
-ttc[6].save(songti_buf)
-```
-
-### 处理图片的特殊约定
-
-```python
-# 中文后备字体搜索路径（按优先级）
-_FONT_CANDIDATES = [
-    "~/Library/Fonts/NotoSansSC-Variable.ttf",
-    "~/Library/Fonts/SimHei.ttf",
-    "/System/Library/Fonts/STHeiti Light.ttc",
-    ...
-]
-```
-
 ### 依赖项
 
 ```
 opencv-python, numpy, pillow, pytesseract  # 图片工具
 pymupdf, fonttools                          # PDF 工具
+opendeep, fastapi, uvicorn, python-dotenv   # DeepSeek 工具
 ```

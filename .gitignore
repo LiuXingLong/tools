@@ -1,5 +1,5 @@
 单车业务报批_20260507154704.pdf
 单车业务报批_20260507154704_output.pdf
-.env
-__pycache__/
-deepseek.log
+deepseek/.env
+deepseek/__pycache__/
+deepseek/deepseek.log

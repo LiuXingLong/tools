@@ -88,6 +88,8 @@ OpenAI /v1/responses 兼容接口，支持流式和非流式
 import json
 import logging
 import os
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -96,9 +98,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 
+_HERE = Path(__file__).parent.resolve()
+sys.path.insert(0, str(_HERE))
+
 from deepseek_responses_api_sdk import DeepSeekResponses, DeepSeekAPIError
 
-load_dotenv()
+load_dotenv(dotenv_path=_HERE / ".env")
 
 
 class _JSONFormatter(logging.Formatter):

@@ -2,7 +2,21 @@
 
 基于 DeepSeek 浏览器端 Web API（非官方）的工具集合，绕过官方 API 计费，通过 PoW 挑战认证。
 
-## 环境变量（.env）
+## 目录结构
+
+```
+deepseek/
+  __init__.py
+  .env                     # 环境变量（不提交）
+  .env.example             # 环境变量模板
+  deepseek_chat_cli.py     # CLI 工具
+  deepseek_responses_api_sdk.py   # Python SDK 封装
+  deepseek_responses_api_server.py # FastAPI HTTP 服务
+  deepseek.log             # 日志文件（不提交）
+sha3_wasm_bg.wasm          # PoW 解算依赖（项目根目录）
+```
+
+## 环境变量（deepseek/.env）
 
 | 变量 | 说明 | 示例值 |
 |------|------|--------|
@@ -11,62 +25,45 @@
 
 ## 脚本说明
 
-### `deepseek_chat_cli.py`
+所有命令需在项目根目录执行：
 
-CLI 工具，支持流式/非流式输出、深度思考、联网搜索、工具调用。
+### `deepseek_chat_cli.py`
 
 ```bash
 # 基础对话
-python3 deepseek_chat_cli.py "你好"
+python3 deepseek/deepseek_chat_cli.py "你好"
 
-# 非流式（合并为一条 JSON）
-python3 deepseek_chat_cli.py "你好" --no-stream
+# 非流式
+python3 deepseek/deepseek_chat_cli.py "你好" --no-stream
 
 # 深度思考（R1 模型）
-python3 deepseek_chat_cli.py "9.9 和 9.11 谁大" --thinking
+python3 deepseek/deepseek_chat_cli.py "9.9 和 9.11 谁大" --thinking
 
 # 联网搜索
-python3 deepseek_chat_cli.py "今天的新闻" --search
+python3 deepseek/deepseek_chat_cli.py "今天的新闻" --search
 
 # 工具调用
-python3 deepseek_chat_cli.py "北京天气怎么样" --tool
+python3 deepseek/deepseek_chat_cli.py "北京天气怎么样" --tool
 ```
 
 ### `deepseek_responses_api_sdk.py`
 
-Python SDK 封装，提供 OpenAI `/v1/responses` 兼容接口。
-
 ```python
-from deepseek_responses_api_sdk import DeepSeekResponses
+from deepseek.deepseek_responses_api_sdk import DeepSeekResponses
 
 client = DeepSeekResponses()
-
-# 非流式
 resp = client.create(model="deepseek-chat", input="你好")
 print(resp["output"])
-
-# 流式
-for event in client.create(model="deepseek-chat", input="你好", stream=True):
-    print(event)
-
-# 工具调用
-resp = client.create(
-    model="deepseek-chat",
-    input="北京的天气",
-    tools=[{"type": "function", "function": {"name": "get_weather", ...}}],
-)
 ```
 
 ### `deepseek_responses_api_server.py`
 
-FastAPI HTTP 服务，提供 OpenAI `/v1/responses` 兼容接口（同时支持 `/responses` 别名）。
-
 ```bash
 # 启动服务
-python3 deepseek_responses_api_server.py
+python3 deepseek/deepseek_responses_api_server.py
 # 默认 http://0.0.0.0:8888
 
-# 基础非流式
+# 非流式
 curl http://localhost:8888/v1/responses \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-chat","input":"你好","stream":false}'
@@ -76,36 +73,19 @@ curl -N http://localhost:8888/v1/responses \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-chat","input":"你好","stream":true}'
 
-# 深度思考（R1 模型）
-curl -N http://localhost:8888/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-reasoner","input":"9.9和9.11谁大","stream":true}'
-
-# 工具调用
-curl http://localhost:8888/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model":"deepseek-chat",
-    "input":"计算 12345 * 67890",
-    "stream":false,
-    "tool_choice":"required",
-    "tools":[{"type":"function","function":{"name":"calculator","description":"计算数学表达式","parameters":{"type":"object","properties":{"expr":{"type":"string"}},"required":["expr"]}}}]
-  }'
-
 # 健康检查
 curl http://localhost:8888/health
 ```
 
 API key 传递方式（按优先级）：
 1. HTTP `Authorization: Bearer <token>` 头
-2. `.env` 文件中 `DEEPSEEK_API_KEY`
+2. `deepseek/.env` 文件中 `DEEPSEEK_API_KEY`
 
 #### 日志系统
 
 - JSON 格式日志，双输出：
   - **控制台**：INFO 及以上（含 `REQ/RESP/DSREQ/DSRES/ERR` 类型标记）
-  - **文件** `deepseek.log`：DEBUG 及以上（含详细步骤）
-- uvicorn 访问日志已抑制
+  - **文件** `deepseek/deepseek.log`：DEBUG 及以上（含详细步骤）
 
 #### SSE 流式事件生命周期
 
@@ -118,7 +98,7 @@ response.created → response.in_progress → response.output_item.added
 
 ### 其他脚本
 
-- `edit_image_text.py` — OCR 驱动的图片文字编辑（替换/删除/添加）
+- `edit_image_text.py` — OCR 驱动的图片文字编辑
 - `replace_pdf.py` — PDF 文字搜索替换
 
 ## 注意事项
