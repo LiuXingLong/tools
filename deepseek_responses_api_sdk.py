@@ -14,6 +14,7 @@ OpenAI /v1/responses 兼容的 DeepSeek Web API 封装
 """
 
 import json
+import logging
 import os
 import re
 import time
@@ -23,12 +24,14 @@ from dotenv import load_dotenv
 
 import opendeep as genai
 from opendeep import pow as deepseek_pow
-from opendeep.config import config
+from opendeep.config import config as ds_config
 
 load_dotenv()
 
 # 从 .env 读取 WASM 路径，默认使用 opendeep 内置
-deepseek_pow.WASM_PATH = os.environ.get("DEEPSEEK_WASM_PATH", deepseek_pow.WASM_PATH)
+deepseek_pow.WASM_PATH = os.environ.get("DEEPSEEK_WASM_PATH", "sha3_wasm_bg.wasm")
+
+logger = logging.getLogger("deepseek.sdk")
 
 TOOL_SYSTEM_PROMPT = """
 你有以下工具可用，需要获取实时信息时请严格按 JSON 格式返回工具调用：
@@ -80,16 +83,25 @@ class DeepSeekResponses:
         self._headers = self._model._get_headers()
 
     def _solve_pow(self):
-        pow_solver = deepseek_pow.DeepSeekPOW()
-        pow_resp = self._session.post(
-            f"{config.base_url}/chat/create_pow_challenge",
-            headers=self._headers,
-            json={"target_path": "/api/v0/chat/completion"},
-        )
-        if pow_resp.ok:
-            cd = pow_resp.json().get("data", {}).get("biz_data", {}).get("challenge")
-            if cd:
-                self._headers["x-ds-pow-response"] = pow_solver.solve_challenge(cd)
+        try:
+            pow_solver = deepseek_pow.DeepSeekPOW()
+            pow_resp = self._session.post(
+                f"{ds_config.base_url}/chat/create_pow_challenge",
+                headers=self._headers,
+                json={"target_path": "/api/v0/chat/completion"},
+            )
+            logger.debug("PoW status=%s", pow_resp.status_code)
+            if pow_resp.ok:
+                cd = pow_resp.json()
+                if cd and isinstance(cd, dict):
+                    cd = cd.get("data", {}).get("biz_data", {}).get("challenge")
+                    if cd:
+                        self._headers["x-ds-pow-response"] = pow_solver.solve_challenge(
+                            cd
+                        )
+        except Exception as e:
+            logger.error("PoW 异常: %s", e)
+            raise RuntimeError(f"PoW 认证失败（token 可能无效）: {e}")
 
     def create(self, **kwargs) -> dict | list[dict]:
         """
@@ -138,14 +150,27 @@ class DeepSeekResponses:
         }
         return prompt, self._model_name, payload
 
-    def _do_request(self, payload: dict):
-        resp = self._session.post(
-            f"{config.base_url}/chat/completion",
-            headers=self._headers,
-            json=payload,
-            stream=True,
-        )
-        resp.raise_for_status()
+    def _do_request(self, payload: dict) -> list[dict]:
+        try:
+            resp = self._session.post(
+                f"{ds_config.base_url}/chat/completion",
+                headers=self._headers,
+                json=payload,
+                stream=True,
+                timeout=120,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            status = getattr(resp, "status_code", 500) if "resp" in dir() else 500
+            detail = str(e)
+            if "resp" in dir():
+                try:
+                    detail = resp.json()
+                except Exception:
+                    detail = getattr(resp, "text", str(e))[:500]
+            raise RuntimeError(
+                f"DeepSeek API 调用失败 (status={status}): {detail}"
+            ) from e
 
         events = []
         for line in resp.iter_lines():
@@ -167,13 +192,31 @@ class DeepSeekResponses:
 
     def _stream(self):
         prompt, model_name, payload = self._prepare()
-        resp = self._session.post(
-            f"{config.base_url}/chat/completion",
-            headers=self._headers,
-            json=payload,
-            stream=True,
-        )
-        resp.raise_for_status()
+        try:
+            resp = self._session.post(
+                f"{ds_config.base_url}/chat/completion",
+                headers=self._headers,
+                json=payload,
+                stream=True,
+                timeout=120,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            status = getattr(resp, "status_code", 500) if "resp" in dir() else 500
+            detail = str(e)
+            if "resp" in dir():
+                try:
+                    detail = resp.json()
+                except Exception:
+                    detail = getattr(resp, "text", str(e))[:500]
+            yield {
+                "type": "error",
+                "error": {
+                    "message": f"DeepSeek API 调用失败: {detail}",
+                    "status": status,
+                },
+            }
+            return
 
         events = []
         for line in resp.iter_lines():
@@ -208,11 +251,6 @@ class DeepSeekResponses:
             "type": "response.output_text.delta",
             "delta": v,
         }
-        if target == "thinking_content":
-            yield {
-                "type": "response.output_text.delta",
-                "delta": v,
-            }
 
     def _parse_input(self, inp) -> str:
         if isinstance(inp, str):
@@ -228,7 +266,15 @@ class DeepSeekResponses:
                             elif isinstance(c, str):
                                 texts.append(c)
                     elif "content" in item:
-                        texts.append(str(item["content"]))
+                        content = item["content"]
+                        if isinstance(content, list):
+                            for c in content:
+                                if isinstance(c, dict) and "text" in c:
+                                    texts.append(c["text"])
+                                elif isinstance(c, str):
+                                    texts.append(c)
+                        elif isinstance(content, str):
+                            texts.append(content)
                 elif isinstance(item, str):
                     texts.append(item)
             return "\n".join(texts)
