@@ -539,6 +539,9 @@ class DeepSeekResponses:
         if match:
             text = match.group(1)
         else:
+            markdown_call = self._extract_markdown_calling_tool_call(text)
+            if markdown_call:
+                return markdown_call
             prefixed_call = self._extract_prefixed_tool_call(text)
             if prefixed_call:
                 return prefixed_call
@@ -562,9 +565,67 @@ class DeepSeekResponses:
                     "name": obj["tool"],
                     "arguments": json.dumps(obj.get("args", {}), ensure_ascii=False),
                 }
+            if isinstance(obj, dict):
+                raw_exec_call = self._build_raw_exec_command_call(obj)
+                if raw_exec_call:
+                    return raw_exec_call
         except (json.JSONDecodeError, TypeError):
             pass
         return None
+
+    def _build_raw_exec_command_call(self, arguments: dict) -> dict | None:
+        tool_names = self._available_tool_names()
+        if "exec_command" not in tool_names:
+            return None
+        if "command" not in arguments and "cmd" not in arguments:
+            return None
+
+        normalized = dict(arguments)
+        if "command" in normalized and "cmd" not in normalized:
+            normalized["cmd"] = normalized.pop("command")
+        return {
+            "name": "exec_command",
+            "arguments": json.dumps(normalized, ensure_ascii=False),
+        }
+
+    def _available_tool_names(self) -> set[str]:
+        names = set()
+        for tool in getattr(self, "_tools", []) or []:
+            func = tool.get("function", tool) if isinstance(tool, dict) else {}
+            name = func.get("name")
+            if name:
+                names.add(name)
+        return names
+
+    def _extract_markdown_calling_tool_call(self, text: str) -> dict | None:
+        match = re.search(
+            r"\*\*Calling:\*\*\s*`?([A-Za-z_]\w*)`?\s*```(?:json)?\s*(\{.*?\})\s*```",
+            text,
+            re.S | re.I,
+        )
+        if not match:
+            return None
+
+        try:
+            arguments = json.loads(match.group(2))
+        except json.JSONDecodeError:
+            try:
+                arguments = self._parse_loose_json_object(match.group(2))
+            except json.JSONDecodeError:
+                return None
+
+        if not isinstance(arguments, dict):
+            return None
+        if (
+            match.group(1) == "exec_command"
+            and "command" in arguments
+            and "cmd" not in arguments
+        ):
+            arguments["cmd"] = arguments.pop("command")
+        return {
+            "name": match.group(1),
+            "arguments": json.dumps(arguments, ensure_ascii=False),
+        }
 
     def _extract_embedded_json_tool_call(self, text: str) -> str | None:
         start = text.find('{"tool"')

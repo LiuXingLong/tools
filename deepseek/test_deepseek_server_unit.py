@@ -297,6 +297,46 @@ class DeepSeekStreamSchemaTest(unittest.TestCase):
             {"cmd": 'find . -type f -name "*.js" | head -50', "workdir": "/tmp"},
         )
 
+    def test_detect_markdown_calling_tool_block(self):
+        client = DeepSeekResponses(api_key="test-token")
+        text = """我来继续深入分析项目的核心代码和架构。
+**Calling:** `exec_command`
+```
+{"command": "ls -la apps/ai-chat/src/db", "max_output_tokens": 500, "workdir": "/tmp"}
+```
+"""
+
+        tool_call = client._detect_tool_call(text)
+
+        self.assertIsNotNone(tool_call)
+        self.assertEqual(tool_call["name"], "exec_command")
+        self.assertEqual(
+            json.loads(tool_call["arguments"]),
+            {
+                "cmd": "ls -la apps/ai-chat/src/db",
+                "max_output_tokens": 500,
+                "workdir": "/tmp",
+            },
+        )
+
+    def test_detect_raw_exec_command_arguments_when_tool_is_available(self):
+        client = DeepSeekResponses(api_key="test-token")
+        client._tools = [{"type": "function", "name": "exec_command"}]
+        text = '{"command": "ls -la apps/ai-chat/src/controller", "max_output_tokens": 500, "workdir": "/tmp"}'
+
+        tool_call = client._detect_tool_call(text)
+
+        self.assertIsNotNone(tool_call)
+        self.assertEqual(tool_call["name"], "exec_command")
+        self.assertEqual(
+            json.loads(tool_call["arguments"]),
+            {
+                "cmd": "ls -la apps/ai-chat/src/controller",
+                "max_output_tokens": 500,
+                "workdir": "/tmp",
+            },
+        )
+
     def test_stream_tool_call_emits_function_call_item_without_empty_message(self):
         client = DeepSeekResponses(api_key="test-token")
         client._model_name = "deepseek-reasoner"
