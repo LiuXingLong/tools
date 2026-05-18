@@ -83,6 +83,18 @@ DeepSeek Responses 代理只做协议适配：
 - `function_call`、`function_call_output` 只做 OpenAI Responses 与 DeepSeek Web API 之间的结构转换；是否继续调用工具由 DeepSeek 的真实返回决定。
 - 允许保留 DeepSeek Web API 必需的协议字段（例如 `search_enabled`、`thinking_enabled`），但不得用这些字段改变 Codex CLI 原有工具语义。
 
+### DeepSeek 工具调用兼容问题
+
+Codex CLI 到代理这一段的 OpenAI Responses 工具协议是固定的；不稳定点在代理到 DeepSeek Web API 这一段：DeepSeek Web API 没有原生 Responses tools schema，工具调用目前依赖 prompt 约束模型输出文本，再由代理解析文本并转换为 Responses `function_call`。
+
+因此调试工具调用问题时要区分两段协议：
+
+- Codex CLI 请求中的 `tools`、`function_call`、`function_call_output` 是固定结构，只能按字段转换，不能按语义改写。
+- DeepSeek 返回的工具调用可能是模型生成文本，常见变体包括纯 JSON、`<tool_call>...</tool_call>`、`工具：name({...})`、前置说明加裸 JSON。
+- 如果 DeepSeek 文本中包含工具调用，代理应提取并转换成 Responses `function_call`，不要把原始工具 JSON 或标签作为 `output_text` 透给 Codex。
+- 如果解析失败，优先查看 `deepseek/deepseek.log` 中的 `DSREQ`、`DSRES`、`RESP`，确认是 DeepSeek 未调用工具、返回了新格式，还是代理转换失败。
+- 修复这类问题只应扩展文本到结构的解析兼容性，不应新增工具、不应过滤 Codex 工具、不应强制 DeepSeek 停止或继续调用工具。
+
 ```bash
 # 依赖
 pip install opendeep fastapi uvicorn python-dotenv

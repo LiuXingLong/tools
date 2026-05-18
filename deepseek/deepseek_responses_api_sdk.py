@@ -538,6 +538,23 @@ class DeepSeekResponses:
         match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, re.S)
         if match:
             text = match.group(1)
+        else:
+            prefixed_call = self._extract_prefixed_tool_call(text)
+            if prefixed_call:
+                return prefixed_call
+            embedded_call = self._extract_embedded_json_tool_call(text)
+            if embedded_call:
+                try:
+                    obj = json.loads(embedded_call)
+                except json.JSONDecodeError:
+                    obj = self._parse_loose_json_object(embedded_call)
+                if isinstance(obj, dict) and "tool" in obj:
+                    return {
+                        "name": obj["tool"],
+                        "arguments": json.dumps(
+                            obj.get("args", {}), ensure_ascii=False
+                        ),
+                    }
         try:
             obj = json.loads(text)
             if isinstance(obj, dict) and "tool" in obj:
@@ -548,6 +565,154 @@ class DeepSeekResponses:
         except (json.JSONDecodeError, TypeError):
             pass
         return None
+
+    def _extract_embedded_json_tool_call(self, text: str) -> str | None:
+        start = text.find('{"tool"')
+        if start == -1:
+            start = text.find('{"tool"'.replace('"', "'"))
+        if start == -1:
+            return None
+        try:
+            end = self._find_balanced_json_end(text, start)
+            return text[start:end]
+        except json.JSONDecodeError:
+            return None
+
+    def _extract_prefixed_tool_call(self, text: str) -> dict | None:
+        match = re.search(r"(?:工具|tool)\s*[:：]\s*([A-Za-z_]\w*)\s*\(", text)
+        if not match:
+            return None
+
+        start = match.end()
+        depth = 1
+        in_string = False
+        escape = False
+        end = start
+        for index, char in enumerate(text[start:], start):
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+
+        if depth != 0:
+            return None
+
+        try:
+            arguments = text[start:end].strip()
+            try:
+                parsed_args = json.loads(arguments)
+            except json.JSONDecodeError:
+                parsed_args = self._parse_loose_json_object(arguments)
+            return {
+                "name": match.group(1),
+                "arguments": json.dumps(parsed_args, ensure_ascii=False),
+            }
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def _parse_loose_json_object(self, text: str) -> dict:
+        text = text.strip()
+        if not (text.startswith("{") and text.endswith("}")):
+            raise json.JSONDecodeError("not object", text, 0)
+
+        result = {}
+        index = 1
+        while index < len(text) - 1:
+            index = self._skip_json_space_and_comma(text, index)
+            if index >= len(text) - 1:
+                break
+            if text[index] != '"':
+                raise json.JSONDecodeError("key expected", text, index)
+            key_end = text.find('"', index + 1)
+            if key_end == -1:
+                raise json.JSONDecodeError("unterminated key", text, index)
+            key = text[index + 1 : key_end]
+            index = self._skip_json_space(text, key_end + 1)
+            if index >= len(text) or text[index] != ":":
+                raise json.JSONDecodeError("colon expected", text, index)
+            index = self._skip_json_space(text, index + 1)
+            value, index = self._parse_loose_json_value(text, index)
+            result[key] = value
+        return result
+
+    def _parse_loose_json_value(self, text: str, index: int):
+        if text[index] == '"':
+            end = index + 1
+            while end < len(text):
+                if text[end] == '"':
+                    next_index = self._skip_json_space(text, end + 1)
+                    if next_index >= len(text) or text[next_index] in ",}":
+                        return text[index + 1 : end], next_index
+                end += 1
+            raise json.JSONDecodeError("unterminated string", text, index)
+
+        if text[index] == "{":
+            end = self._find_balanced_json_end(text, index)
+            return self._parse_loose_json_object(
+                text[index:end]
+            ), self._skip_json_space(text, end)
+
+        if text[index] == "[":
+            end = self._find_balanced_json_end(text, index)
+            return json.loads(text[index:end]), self._skip_json_space(text, end)
+
+        end = index
+        while end < len(text) and text[end] not in ",}":
+            end += 1
+        raw = text[index:end].strip()
+        if raw in ("true", "false", "null"):
+            return json.loads(raw), self._skip_json_space(text, end)
+        try:
+            return json.loads(raw), self._skip_json_space(text, end)
+        except json.JSONDecodeError:
+            return raw, self._skip_json_space(text, end)
+
+    def _find_balanced_json_end(self, text: str, index: int) -> int:
+        pairs = {"{": "}", "[": "]"}
+        stack = [pairs[text[index]]]
+        in_string = False
+        escape = False
+        cursor = index + 1
+        while cursor < len(text):
+            char = text[cursor]
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = not in_string
+            elif not in_string and char in pairs:
+                stack.append(pairs[char])
+            elif not in_string and stack and char == stack[-1]:
+                stack.pop()
+                if not stack:
+                    return cursor + 1
+            cursor += 1
+        raise json.JSONDecodeError("unbalanced value", text, index)
+
+    def _skip_json_space(self, text: str, index: int) -> int:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        return index
+
+    def _skip_json_space_and_comma(self, text: str, index: int) -> int:
+        while index < len(text) and (text[index].isspace() or text[index] == ","):
+            index += 1
+        return index
 
     def _build_response(
         self, model_name: str, full_text: str, tool_call: dict | None, has_tools: bool

@@ -263,6 +263,40 @@ class DeepSeekStreamSchemaTest(unittest.TestCase):
             json.loads(tool_call["arguments"]), {"cmd": "ls -la", "workdir": "/tmp"}
         )
 
+    def test_detect_tool_call_in_chinese_tool_prefix_format(self):
+        client = DeepSeekResponses(api_key="test-token")
+        text = """继续查看源码结构。
+工具：exec_command({"cmd":"find apps libs -type f -name \"*.ts\" | head -100","workdir":"/tmp"})
+"""
+
+        tool_call = client._detect_tool_call(text)
+
+        self.assertIsNotNone(tool_call)
+        self.assertEqual(tool_call["name"], "exec_command")
+        self.assertEqual(
+            json.loads(tool_call["arguments"]),
+            {
+                "cmd": 'find apps libs -type f -name "*.ts" | head -100',
+                "workdir": "/tmp",
+            },
+        )
+
+    def test_detect_embedded_json_tool_call_after_text(self):
+        client = DeepSeekResponses(api_key="test-token")
+        text = """我将分析项目。先查看文件结构。
+
+{"tool":"exec_command","args":{"cmd":"find . -type f -name \"*.js\" | head -50","workdir":"/tmp"}}
+"""
+
+        tool_call = client._detect_tool_call(text)
+
+        self.assertIsNotNone(tool_call)
+        self.assertEqual(tool_call["name"], "exec_command")
+        self.assertEqual(
+            json.loads(tool_call["arguments"]),
+            {"cmd": 'find . -type f -name "*.js" | head -50', "workdir": "/tmp"},
+        )
+
     def test_stream_tool_call_emits_function_call_item_without_empty_message(self):
         client = DeepSeekResponses(api_key="test-token")
         client._model_name = "deepseek-reasoner"
