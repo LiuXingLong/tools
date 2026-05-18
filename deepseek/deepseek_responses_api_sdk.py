@@ -545,6 +545,9 @@ class DeepSeekResponses:
             prefixed_call = self._extract_prefixed_tool_call(text)
             if prefixed_call:
                 return prefixed_call
+            fenced_call = self._extract_fenced_json_tool_call(text)
+            if fenced_call:
+                return fenced_call
             embedded_call = self._extract_embedded_json_tool_call(text)
             if embedded_call:
                 try:
@@ -626,6 +629,27 @@ class DeepSeekResponses:
             "name": match.group(1),
             "arguments": json.dumps(arguments, ensure_ascii=False),
         }
+
+    def _extract_fenced_json_tool_call(self, text: str) -> dict | None:
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S | re.I)
+        if not match:
+            return None
+        try:
+            obj = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            try:
+                obj = self._parse_loose_json_object(match.group(1))
+            except json.JSONDecodeError:
+                return None
+
+        if isinstance(obj, dict) and "tool" in obj:
+            return {
+                "name": obj["tool"],
+                "arguments": json.dumps(obj.get("args", {}), ensure_ascii=False),
+            }
+        if isinstance(obj, dict):
+            return self._build_raw_exec_command_call(obj)
+        return None
 
     def _extract_embedded_json_tool_call(self, text: str) -> str | None:
         start = text.find('{"tool"')

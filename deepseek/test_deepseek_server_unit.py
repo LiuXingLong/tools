@@ -297,6 +297,32 @@ class DeepSeekStreamSchemaTest(unittest.TestCase):
             {"cmd": 'find . -type f -name "*.js" | head -50', "workdir": "/tmp"},
         )
 
+    def test_detect_fenced_json_tool_call_after_text(self):
+        client = DeepSeekResponses(api_key="test-token")
+        text = """我将分析这个 NestJS 后端项目的整体架构。
+```json
+{
+"tool": "exec_command",
+"args": {
+"cmd": "cat apps/ai-chat/src/main.ts",
+"justification": "查看应用入口文件"
+}
+}
+```
+"""
+
+        tool_call = client._detect_tool_call(text)
+
+        self.assertIsNotNone(tool_call)
+        self.assertEqual(tool_call["name"], "exec_command")
+        self.assertEqual(
+            json.loads(tool_call["arguments"]),
+            {
+                "cmd": "cat apps/ai-chat/src/main.ts",
+                "justification": "查看应用入口文件",
+            },
+        )
+
     def test_detect_markdown_calling_tool_block(self):
         client = DeepSeekResponses(api_key="test-token")
         text = """我来继续深入分析项目的核心代码和架构。
