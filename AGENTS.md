@@ -72,6 +72,17 @@ tools/
 所有 DeepSeek 核心逻辑在 `deepseek/deepseek_responses_api_sdk.py` 中维护，
 `deepseek/deepseek_responses_api_server.py` 仅负责 HTTP 路由和 SSE 格式转换。
 
+### Codex CLI 代理原则
+
+DeepSeek Responses 代理只做协议适配：
+
+- 只支持 Responses 模式 `/v1/responses`，不新增其他兼容入口，除非用户明确要求。
+- Codex CLI 请求中带了哪些 `tools`，就只转换这些工具给 DeepSeek；不得新增、替换、过滤或按语义启停工具。
+- 不要在代理层根据天气、实时信息、搜索等语义修改工具调用策略。
+- 不要注入与原始请求无关的控制性提示，例如强制不再调用工具、强制改用某种搜索方式。
+- `function_call`、`function_call_output` 只做 OpenAI Responses 与 DeepSeek Web API 之间的结构转换；是否继续调用工具由 DeepSeek 的真实返回决定。
+- 允许保留 DeepSeek Web API 必需的协议字段（例如 `search_enabled`、`thinking_enabled`），但不得用这些字段改变 Codex CLI 原有工具语义。
+
 ```bash
 # 依赖
 pip install opendeep fastapi uvicorn python-dotenv

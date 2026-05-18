@@ -152,10 +152,26 @@ def _get_client(api_key: str) -> DeepSeekResponses:
     return DeepSeekResponses(api_key=api_key)
 
 
+def _resolve_api_key(request: Request) -> str:
+    """获取上游 DeepSeek Token，优先使用服务端环境变量"""
+    env_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    auth = request.headers.get("Authorization", "")
+    return auth.removeprefix("Bearer ").strip()
+
+
 def _non_stream_response(api_key: str, body: dict) -> dict:
     client = _get_client(api_key)
     result = client.create(**body)
     return result
+
+
+def _wants_stream(request: Request, body: dict) -> bool:
+    """判断请求是否需要 SSE 响应"""
+    accept = request.headers.get("accept", "")
+    return bool(body.get("stream", False)) or "text/event-stream" in accept.lower()
 
 
 async def _stream_response(api_key: str, body: dict):
@@ -169,9 +185,11 @@ async def _stream_response(api_key: str, body: dict):
             ev_type = ev.get("type", "")
             data = json.dumps(ev, ensure_ascii=False)
             yield f"event: {ev_type}\ndata: {data}\n\n"
+        yield "data: [DONE]\n\n"
     except DeepSeekAPIError as e:
         logger.warning({"type": "ERR", "error": e.message, "status": e.status})
         yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': e.message, 'status': e.status}}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
     except Exception as e:
         import traceback
 
@@ -179,6 +197,7 @@ async def _stream_response(api_key: str, body: dict):
             "流式处理异常: %s %s\n%s", type(e).__name__, e, traceback.format_exc()
         )
         yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': f'{type(e).__name__}: {e}', 'status': 500}}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 @app.get("/health")
@@ -201,10 +220,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def responses_endpoint(request: Request):
     client_ip = request.client.host if request.client else "unknown"
 
-    auth = request.headers.get("Authorization", "")
-    api_key = auth.removeprefix("Bearer ").strip() or os.environ.get(
-        "DEEPSEEK_API_KEY", ""
-    )
+    api_key = _resolve_api_key(request)
     if not api_key:
         logger.warning("[%s] <<< 401 无 API key", client_ip)
         return JSONResponse(
@@ -226,7 +242,7 @@ async def responses_endpoint(request: Request):
 
     logger.info({"type": "REQ", "client_ip": client_ip, "body": body})
 
-    stream = body.get("stream", False)
+    stream = _wants_stream(request, body)
     if stream:
         return StreamingResponse(
             _stream_response(api_key, body),

@@ -128,7 +128,7 @@ class DeepSeekResponses:
             {
                 "type": "REQ",
                 "model": self._model_name,
-                "input": str(kwargs.get("input", ""))[:80],
+                "input": kwargs.get("input", ""),
             }
         )
 
@@ -256,11 +256,20 @@ class DeepSeekResponses:
             final = self._build_response(
                 model_name, full_text, tool_call, self._has_tools
             )
-            msg_id = (
-                final.get("output", [{}])[0].get("id", "msg_unknown")
-                if final.get("output")
-                else "msg_unknown"
+            msg_item = next(
+                (
+                    item
+                    for item in final.get("output", [])
+                    if item.get("type") == "message"
+                ),
+                {
+                    "id": "msg_unknown",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                },
             )
+            msg_id = msg_item.get("id", "msg_unknown")
             seq = 0
 
             yield {
@@ -277,20 +286,81 @@ class DeepSeekResponses:
             }
             seq += 1
 
+            if tool_call:
+                call_item = final["output"][0]
+                yield {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item_id": call_item["id"],
+                    "item": {
+                        **call_item,
+                        "arguments": "",
+                    },
+                    "sequence_number": seq,
+                }
+                seq += 1
+
+                yield {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": call_item["id"],
+                    "output_index": 0,
+                    "delta": call_item["arguments"],
+                    "sequence_number": seq,
+                }
+                seq += 1
+
+                yield {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": call_item["id"],
+                    "output_index": 0,
+                    "arguments": call_item["arguments"],
+                    "sequence_number": seq,
+                }
+                seq += 1
+
+                yield {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item_id": call_item["id"],
+                    "item": call_item,
+                    "sequence_number": seq,
+                }
+                seq += 1
+
+                yield {
+                    "type": "response.completed",
+                    "response": final,
+                    "sequence_number": seq,
+                }
+                logger.info({"type": "RESP", "model": model_name, "resp": final})
+                return
+
             yield {
                 "type": "response.output_item.added",
                 "output_index": 0,
                 "item_id": msg_id,
+                "item": {
+                    "type": "message",
+                    "id": msg_id,
+                    "role": "assistant",
+                    "content": [],
+                },
                 "sequence_number": seq,
             }
             seq += 1
 
+            content_part = {
+                "type": "output_text",
+                "text": "",
+                "annotations": [],
+            }
             yield {
                 "type": "response.content_part.added",
                 "content_index": 0,
                 "item_id": msg_id,
                 "output_index": 0,
                 "part_id": "part_0",
+                "part": content_part,
                 "sequence_number": seq,
             }
             seq += 1
@@ -319,6 +389,11 @@ class DeepSeekResponses:
                 "item_id": msg_id,
                 "output_index": 0,
                 "part_id": "part_0",
+                "part": {
+                    "type": "output_text",
+                    "text": full_text,
+                    "annotations": [],
+                },
                 "sequence_number": seq,
             }
             seq += 1
@@ -327,6 +402,7 @@ class DeepSeekResponses:
                 "type": "response.output_item.done",
                 "output_index": 0,
                 "item_id": msg_id,
+                "item": msg_item,
                 "sequence_number": seq,
             }
             seq += 1
@@ -360,7 +436,7 @@ class DeepSeekResponses:
         target = "content"
         if p:
             target = p.removeprefix("response/")
-        if target not in ("content", "thinking_content"):
+        if target != "content":
             return None
         return {
             "type": "response.output_text.delta",
@@ -374,29 +450,75 @@ class DeepSeekResponses:
         if isinstance(inp, str):
             return inp
         if isinstance(inp, list):
-            texts = []
+            messages = []
+            fallback_texts = []
+            tool_outputs = []
             for item in inp:
                 if isinstance(item, dict):
+                    role = item.get("role")
                     if item.get("type") == "message":
-                        for c in item.get("content", []):
-                            if isinstance(c, dict) and c.get("type") == "input_text":
-                                texts.append(c["text"])
-                            elif isinstance(c, str):
-                                texts.append(c)
+                        text = self._extract_content_text(item.get("content"))
+                        if role in ("user", "assistant") and text:
+                            messages.append({"role": role, "text": text})
+                        elif not role and text:
+                            fallback_texts.append(text)
                     elif "content" in item:
-                        content = item["content"]
-                        if isinstance(content, list):
-                            for c in content:
-                                if isinstance(c, dict) and "text" in c:
-                                    texts.append(c["text"])
-                                elif isinstance(c, str):
-                                    texts.append(c)
-                        elif isinstance(content, str):
-                            texts.append(content)
+                        text = self._extract_content_text(item.get("content"))
+                        if role in ("user", "assistant") and text:
+                            messages.append({"role": role, "text": text})
+                        elif text:
+                            fallback_texts.append(text)
+                    elif item.get("type") == "function_call_output":
+                        output = item.get("output", "")
+                        if isinstance(output, str) and output.strip():
+                            tool_outputs.append(output.strip())
                 elif isinstance(item, str):
-                    texts.append(item)
-            return "\n".join(texts)
+                    fallback_texts.append(item)
+            if messages:
+                recent_messages = messages[-12:]
+                if (
+                    tool_outputs
+                    and len(recent_messages) == 1
+                    and recent_messages[0]["role"] == "user"
+                ):
+                    prompt = f"当前用户：{recent_messages[0]['text']}"
+                else:
+                    prompt = self._format_messages(recent_messages)
+                if tool_outputs:
+                    prompt += "\n" + "\n".join(
+                        f"工具结果：{output}" for output in tool_outputs[-4:]
+                    )
+                return prompt
+            return "\n".join(fallback_texts)
         return str(inp)
+
+    def _extract_content_text(self, content) -> str:
+        texts = []
+        if isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and isinstance(c.get("text"), str):
+                    texts.append(c["text"])
+                elif isinstance(c, str):
+                    texts.append(c)
+        elif isinstance(content, str):
+            texts.append(content)
+        return "\n".join(text.strip() for text in texts if text.strip())
+
+    def _format_messages(self, messages: list[dict]) -> str:
+        if len(messages) == 1 and messages[0]["role"] == "user":
+            return messages[0]["text"]
+
+        lines = []
+        for msg in messages[:-1]:
+            label = "用户" if msg["role"] == "user" else "助手"
+            lines.append(f"{label}：{msg['text']}")
+
+        last = messages[-1]
+        if last["role"] == "user":
+            lines.append(f"当前用户：{last['text']}")
+        else:
+            lines.append(f"助手：{last['text']}")
+        return "\n".join(lines)
 
     def _merge_events(self, events: list[dict]) -> str:
         text = ""
@@ -408,7 +530,7 @@ class DeepSeekResponses:
             v = ev["v"]
             if p:
                 target = p.removeprefix("response/")
-            if isinstance(v, str) and target in ("content", "thinking_content"):
+            if isinstance(v, str) and target == "content":
                 text += v
         return text
 
@@ -444,7 +566,7 @@ class DeepSeekResponses:
             )
 
         content_parts = []
-        if full_text:
+        if full_text and not tool_call:
             content_parts.append(
                 {
                     "type": "output_text",
