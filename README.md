@@ -12,8 +12,10 @@ deepseek/
   deepseek_chat_cli.py     # CLI 工具
   deepseek_responses_api_sdk.py   # Python SDK 封装
   deepseek_responses_api_server.py # FastAPI HTTP 服务
+  restart_server.sh        # HTTP 服务重启脚本
   sha3_wasm_bg.wasm        # PoW 解算依赖
   test_deepseek.py         # 测试脚本
+  test_restart_script.py   # 重启脚本测试
   deepseek.log             # 日志文件（不提交）
 ```
 
@@ -91,6 +93,19 @@ curl -N http://localhost:8888/v1/responses \
 # 健康检查
 curl http://localhost:8888/health
 ```
+
+### `restart_server.sh`
+
+```bash
+# 重启 HTTP 服务（默认端口 8888）
+deepseek/restart_server.sh
+
+# 指定端口重启
+PORT=8899 deepseek/restart_server.sh
+```
+
+脚本会自动停止占用目标端口的旧进程，后台启动 `deepseek_responses_api_server.py`，并检查 `/health`。
+服务输出写入 `deepseek/deepseek_server.out`。
 
 API key 传递方式（按优先级）：
 1. HTTP `Authorization: Bearer <token>` 头
