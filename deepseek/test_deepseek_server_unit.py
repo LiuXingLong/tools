@@ -2,6 +2,7 @@
 
 import sys
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -243,6 +244,24 @@ class DeepSeekStreamSchemaTest(unittest.TestCase):
 
         self.assertEqual(response["output"][0]["type"], "function_call")
         self.assertEqual(len(response["output"]), 1)
+
+    def test_detect_tool_call_inside_tool_call_tags(self):
+        client = DeepSeekResponses(api_key="test-token")
+        text = """我先查看目录。
+
+<tool_call>
+{"tool":"exec_command","args":{"cmd":"ls -la","workdir":"/tmp"}}
+</tool_call>
+当前用户：分析项目
+"""
+
+        tool_call = client._detect_tool_call(text)
+
+        self.assertIsNotNone(tool_call)
+        self.assertEqual(tool_call["name"], "exec_command")
+        self.assertEqual(
+            json.loads(tool_call["arguments"]), {"cmd": "ls -la", "workdir": "/tmp"}
+        )
 
     def test_stream_tool_call_emits_function_call_item_without_empty_message(self):
         client = DeepSeekResponses(api_key="test-token")

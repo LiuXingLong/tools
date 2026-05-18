@@ -535,6 +535,9 @@ class DeepSeekResponses:
         return text
 
     def _detect_tool_call(self, text: str) -> dict | None:
+        match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, re.S)
+        if match:
+            text = match.group(1)
         try:
             obj = json.loads(text)
             if isinstance(obj, dict) and "tool" in obj:
